@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voice Assistant</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header" aria-label="Voice assistant header">
+        <div class="brand">
+          <div class="pulse-dot" aria-hidden="true"></div>
+          <h1>Voice Assistant</h1>
+          <span class="badge">Gemini + Whisper/TTS</span>
+        </div>
+        <div class="header-actions">
+          <button
+            id="health-check"
+            class="ghost"
+            aria-label="Check service health"
+          >
+            Health
+          </button>
+          <label class="toggle" aria-label="Toggle dark mode">
+            <input type="checkbox" id="theme-toggle" />
+            <span class="slider"></span>
+            <span class="toggle-label">Dark</span>
+          </label>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="chat" aria-live="polite">
+          <div id="messages" class="messages" aria-label="Conversation"></div>
+          <div class="composer" aria-label="Message composer">
+            <div class="input-group">
+              <textarea
+                id="text-input"
+                rows="2"
+                placeholder="Type a message or use the mic"
+                aria-label="Message input"
+              ></textarea>
+              <div class="controls">
+                <button
+                  id="copy-last"
+                  class="ghost"
+                  aria-label="Copy last response"
+                >
+                  Copy
+                </button>
+                <button id="send-btn" class="primary" aria-label="Send message">
+                  Send
+                </button>
+              </div>
+            </div>
+            <div class="voice-controls">
+              <div class="mic-wrapper" aria-label="Voice recorder">
+                <button id="mic-btn" class="mic" aria-pressed="false">
+                  <span class="mic-icon">🎤</span>
+                  <span class="mic-wave"></span>
+                </button>
+                <canvas
+                  id="waveform"
+                  width="180"
+                  height="36"
+                  aria-hidden="true"
+                ></canvas>
+                <span id="recording-hint" class="hint"
+                  >Hold to talk. Auto-stops on silence.</span
+                >
+              </div>
+              <div class="audio-status" id="audio-status"></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-panel" aria-label="Transcripts and status">
+          <div class="panel-card">
+            <div class="panel-header">
+              <h2>Live Transcript</h2>
+              <button
+                id="reset-history"
+                class="ghost"
+                aria-label="Reset conversation"
+              >
+                Reset
+              </button>
+            </div>
+            <div id="transcript-log" class="transcript-log"></div>
+          </div>
+          <div class="panel-card">
+            <div class="panel-header">
+              <h2>Playback</h2>
+            </div>
+            <div id="player" class="player" aria-live="polite">
+              <div class="player-info">No audio yet</div>
+              <progress id="audio-progress" value="0" max="100"></progress>
+              <audio id="audio-player" controls preload="none"></audio>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+    <script src="/static/js/voice.js"></script>
+  </body>
+</html>

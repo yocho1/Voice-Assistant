@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    container_name: voice-assistant
+    env_file: .env
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./static/audio:/app/static/audio
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
