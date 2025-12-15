@@ -11,9 +11,9 @@ from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import google.generativeai as genai
-import whisper
-from TTS.api import TTS
+import requests
+import speech_recognition as sr
+import pyttsx3
 
 # Load environment early so defaults and type coercion work below.
 load_dotenv()
@@ -30,10 +30,12 @@ REQUESTS_PER_MINUTE = os.getenv("REQUESTS_PER_MINUTE", "60")
 MAX_AUDIO_AGE_MINUTES = int(os.getenv("MAX_AUDIO_AGE_MINUTES", "60"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
 
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-TTS_MODEL = os.getenv("TTS_MODEL", "tts_models/en/ljspeech/tacotron2-DDC")
-TTS_VOICE = os.getenv("TTS_VOICE", "en-US")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "SpeechRecognition")
+TTS_MODEL = os.getenv("TTS_MODEL", "pyttsx3")
+TTS_VOICE = os.getenv("TTS_VOICE", "default")
 AUDIO_FORMAT = os.getenv("AUDIO_FORMAT", "wav")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "change-me")
@@ -50,65 +52,45 @@ logging.basicConfig(
 logger = logging.getLogger("voice-assistant")
 
 conversation_history: List[Dict[str, str]] = []
-gemini_model = None
+ollama_model = None
 stt_service = None
 tts_service = None
 
 
-def configure_gemini():
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("GEMINI_API_KEY is not set; chat routes will be disabled.")
-        return None
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(GEMINI_MODEL)
+def configure_ollama():
+    """Check if Ollama is running."""
+    try:
+        response = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+        if response.status_code == 200:
+            logger.info("Ollama is running and ready")
+            return True
+    except Exception as exc:
+        logger.warning("Ollama is not running at %s: %s", OLLAMA_HOST, exc)
+    return False
 
 
 class STTService:
-    def __init__(self, model_size: str):
+    def __init__(self, model_size: str = "default"):
+        self.recognizer = sr.Recognizer()
         self.model_size = model_size
-        self.model = whisper.load_model(model_size)
-
-    def _convert_to_wav(self, path: Path) -> Path:
-        if path.suffix.lower() == ".wav":
-            return path
-        wav_path = path.with_suffix(".wav")
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(path),
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            str(wav_path),
-        ]
-        try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            raise RuntimeError("ffmpeg is required for audio conversion but is not installed")
-        except subprocess.CalledProcessError:
-            raise RuntimeError("Failed to convert audio; file may be corrupted or unsupported")
-        return wav_path
 
     def transcribe(self, path: Path, language: Optional[str] = None) -> Dict:
-        wav_path = self._convert_to_wav(path)
-        result = self.model.transcribe(str(wav_path), language=language, fp16=False)
-        raw_segments = result.get("segments", [])
-        segments = [
-            {
-                "text": seg.get("text", "").strip(),
-                "start": float(seg.get("start", 0.0) or 0.0),
-                "end": float(seg.get("end", 0.0) or 0.0),
+        try:
+            with sr.AudioFile(str(path)) as source:
+                audio = self.recognizer.record(source)
+            
+            language_code = language if language else "en-US"
+            text = self.recognizer.recognize_google(audio, language=language_code)
+            
+            return {
+                "text": text.strip(),
+                "segments": [{"text": text.strip(), "start": 0.0, "end": 0.0}],
+                "language": language_code,
             }
-            for seg in raw_segments
-        ]
-        return {
-            "text": result.get("text", "").strip(),
-            "segments": segments,
-            "language": result.get("language"),
-        }
+        except sr.UnknownValueError:
+            raise RuntimeError("Could not understand audio")
+        except sr.RequestError as exc:
+            raise RuntimeError(f"Speech recognition service error: {exc}")
 
 
 class TTSService:
@@ -116,22 +98,26 @@ class TTSService:
         self.model_name = model_name
         self.default_voice = default_voice
         self.audio_format = audio_format.lower()
-        self.tts = TTS(model_name)
-        self.cache: Dict[Tuple[str, str, str], Path] = {}
+        self.engine = pyttsx3.init()
+        self.cache: Dict[Tuple[str, str], Path] = {}
         self.cache_limit = 20
 
-    def _convert_format(self, wav_path: Path) -> Path:
-        if self.audio_format == "wav":
-            return wav_path
-        out_path = wav_path.with_suffix(f".{self.audio_format}")
-        cmd = ["ffmpeg", "-y", "-i", str(wav_path), str(out_path)]
+    def synthesize(self, text: str, voice: Optional[str] = None) -> Path:
+        key = (text, voice or self.default_voice)
+        cached = self.cache.get(key)
+        if cached and cached.exists():
+            return cached
+
+        audio_path = AUDIO_DIR / f"tts-{uuid.uuid4().hex}.wav"
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            raise RuntimeError("ffmpeg is required for audio conversion but is not installed")
-        except subprocess.CalledProcessError:
-            raise RuntimeError("Failed to convert synthesized audio")
-        return out_path
+            self.engine.save_to_file(text, str(audio_path))
+            self.engine.runAndWait()
+        except Exception as exc:
+            raise RuntimeError(f"TTS synthesis failed: {exc}")
+
+        self.cache[key] = audio_path
+        self._evict_cache()
+        return audio_path
 
     def _evict_cache(self):
         if len(self.cache) <= self.cache_limit:
@@ -141,28 +127,6 @@ class TTSService:
             self.cache[oldest_key].unlink(missing_ok=True)
         finally:
             self.cache.pop(oldest_key, None)
-
-    def synthesize(self, text: str, voice: Optional[str] = None) -> Path:
-        key = (text, voice or self.default_voice, self.audio_format)
-        cached = self.cache.get(key)
-        if cached and cached.exists():
-            return cached
-
-        wav_path = AUDIO_DIR / f"tts-{uuid.uuid4().hex}.wav"
-        kwargs = {}
-        if voice or self.default_voice:
-            speaker = voice or self.default_voice
-            if getattr(self.tts, "speakers", None):
-                kwargs["speaker"] = speaker
-        try:
-            self.tts.tts_to_file(text=text, file_path=str(wav_path), **kwargs)
-        except Exception as exc:
-            raise RuntimeError(f"TTS synthesis failed: {exc}")
-
-        final_path = self._convert_format(wav_path)
-        self.cache[key] = final_path
-        self._evict_cache()
-        return final_path
 
 
 def prune_audio(max_age_minutes: int = MAX_AUDIO_AGE_MINUTES) -> None:
@@ -205,18 +169,28 @@ def build_prompt(user_message: str) -> List[Dict[str, str]]:
 
 
 def chat_completion(message: str) -> str:
-    if not gemini_model:
-        raise RuntimeError("Gemini not configured")
+    if not ollama_model:
+        raise RuntimeError("Ollama not configured or running")
+    
     history_context = "\n".join([f"{m['role']}: {m['content']}" for m in conversation_history[-(CONVERSATION_WINDOW * 2):]])
     prompt = f"You are a concise, helpful voice assistant.\n\nConversation history:\n{history_context}\n\nuser: {message}\nassistant:"
-    response = gemini_model.generate_content(
-        prompt,
-        generation_config=genai.types.GenerationConfig(
-            temperature=GEMINI_TEMPERATURE,
-            max_output_tokens=GEMINI_MAX_TOKENS,
-        ),
-    )
-    return response.text.strip()
+    
+    try:
+        response = requests.post(
+            f"{OLLAMA_HOST}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": GEMINI_TEMPERATURE,
+            },
+            timeout=60
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get("response", "").strip()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"Ollama request failed: {exc}")
 
 
 @app.route("/")
@@ -231,12 +205,11 @@ def health():
     return jsonify(
         {
             "status": "ok",
-            "gemini": bool(gemini_model),
+            "ollama": bool(ollama_model),
             "stt": bool(stt_service),
             "tts": bool(tts_service),
-            "whisper_model": WHISPER_MODEL,
-            "tts_model": TTS_MODEL,
-            "gemini_model": GEMINI_MODEL,
+            "ollama_model": OLLAMA_MODEL,
+            "ollama_host": OLLAMA_HOST,
         }
     )
 
@@ -255,8 +228,8 @@ def reset_conversation():
 @app.route("/api/chat", methods=["POST"])
 @limiter.limit("30 per minute")
 def chat():
-    if not gemini_model:
-        return jsonify({"error": "Gemini not configured"}), 503
+    if not ollama_model:
+        return jsonify({"error": "Ollama not running. Start it with: ollama run mistral"}), 503
 
     payload = request.get_json(silent=True) or {}
     message = (payload.get("message") or "").strip()
@@ -270,7 +243,7 @@ def chat():
         append_history("user", message)
         append_history("assistant", reply)
     except Exception as exc:
-        logger.exception("Gemini completion failed")
+        logger.exception("Ollama completion failed")
         return jsonify({"error": str(exc)}), 500
 
     audio_url = None
@@ -344,18 +317,18 @@ def handle_exception(e):
     return jsonify({"error": "Internal server error"}), 500
 
 
-# Initialize third-party clients at import time to fail fast on boot.
-gemini_model = configure_gemini()
+# Initialize services at import time
+ollama_model = configure_ollama()
 try:
     stt_service = STTService(WHISPER_MODEL)
 except Exception as exc:
-    logger.error("Failed to load Whisper model: %s", exc)
+    logger.error("Failed to load speech recognition: %s", exc)
     stt_service = None
 
 try:
     tts_service = TTSService(TTS_MODEL, TTS_VOICE, AUDIO_FORMAT)
 except Exception as exc:
-    logger.error("Failed to load TTS model: %s", exc)
+    logger.error("Failed to load text-to-speech: %s", exc)
     tts_service = None
 
 
