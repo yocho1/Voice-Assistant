@@ -4,7 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Voice Assistant</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
+    <link
+      rel="icon"
+      href="/static/favicon.svg?v={{ asset_version }}"
+      type="image/svg+xml"
+    />
+    <link rel="stylesheet" href="/static/css/style.css?v={{ asset_version }}" />
   </head>
   <body>
     <div class="app-shell">
@@ -91,6 +96,19 @@
           </div>
           <div class="panel-card">
             <div class="panel-header">
+              <h2>Service Info</h2>
+            </div>
+            <div
+              id="health-info"
+              class="transcript-log"
+              style="
+                font-family: ui-monospace, Menlo, Consolas, monospace;
+                white-space: pre-wrap;
+              "
+            ></div>
+          </div>
+          <div class="panel-card">
+            <div class="panel-header">
               <h2>Playback</h2>
             </div>
             <div id="player" class="player" aria-live="polite">
@@ -102,6 +120,6 @@
         </aside>
       </main>
     </div>
-    <script src="/static/js/voice.js"></script>
+    <script src="/static/js/voice.js?v={{ asset_version }}"></script>
   </body>
 </html>

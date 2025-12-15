@@ -16,8 +16,14 @@ const themeToggle = qs('#theme-toggle')
 const state = {
   history: [],
   isRecording: false,
-  mediaRecorder: null,
-  audioChunks: [],
+  // Custom WAV recorder state (avoids ffmpeg on server)
+  stream: null,
+  sourceNode: null,
+  processorNode: null,
+  wavBuffers: [],
+  sampleRate: 0,
+  samplesCollected: 0,
+  startedAt: 0,
   audioContext: null,
   analyser: null,
   silenceTimeout: null,
@@ -162,11 +168,16 @@ audioPlayer.addEventListener('ended', () => {
 healthBtn.addEventListener('click', async () => {
   try {
     const res = await apiFetch('/health')
-    audioStatus.textContent = `Health: ok | Gemini ${
-      res.gemini ? 'on' : 'off'
-    } (${res.gemini_model || 'N/A'}) | STT ${res.stt ? 'on' : 'off'} (${
-      res.whisper_model
-    }) | TTS ${res.tts ? 'on' : 'off'} (${res.tts_model})`
+    const info = [
+      `Status: ${res.status}`,
+      `Provider: ${res.provider} (${res.model || 'N/A'})`,
+      `STT: ${res.stt ? 'on' : 'off'} (${res.whisper_model || 'N/A'})`,
+      `TTS: ${res.tts ? 'on' : 'off'} (${res.tts_model || 'N/A'})`,
+      `FFmpeg: ${res.ffmpeg ? 'available' : 'not found'}`,
+    ].join('\n')
+    const healthBox = qs('#health-info')
+    if (healthBox) healthBox.textContent = info
+    audioStatus.textContent = 'Health: ok'
   } catch (err) {
     audioStatus.textContent = 'Health check failed'
   }
@@ -232,34 +243,93 @@ async function startRecording() {
   micBtn.classList.add('recording')
   audioStatus.textContent = 'Recording...'
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  state.stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    },
+  })
   state.audioContext = new (window.AudioContext || window.webkitAudioContext)()
-  const source = state.audioContext.createMediaStreamSource(stream)
-  startSilenceDetection(source)
+  state.sourceNode = state.audioContext.createMediaStreamSource(state.stream)
+  state.sampleRate = state.audioContext.sampleRate
+  state.samplesCollected = 0
+  state.startedAt = performance.now()
+  startSilenceDetection(state.sourceNode)
   drawWaveform()
 
-  state.mediaRecorder = new MediaRecorder(stream)
-  state.audioChunks = []
-  state.mediaRecorder.ondataavailable = (e) => {
-    if (e.data.size > 0) state.audioChunks.push(e.data)
+  // Use ScriptProcessorNode for broad compatibility to capture PCM
+  const bufferSize = 2048
+  const channels = 1
+  state.wavBuffers = []
+  const processor = state.audioContext.createScriptProcessor(
+    bufferSize,
+    channels,
+    channels
+  )
+  processor.onaudioprocess = (e) => {
+    if (!state.isRecording) return
+    const input = e.inputBuffer.getChannelData(0)
+    // clone the buffer (Float32Array) before next tick overwrites it
+    state.wavBuffers.push(new Float32Array(input))
+    state.samplesCollected += input.length
   }
-  state.mediaRecorder.onstop = () => {
-    stream.getTracks().forEach((t) => t.stop())
-    state.audioContext.close()
-    state.audioContext = null
-    submitRecording()
-  }
-  state.mediaRecorder.start()
+  state.sourceNode.connect(processor)
+  processor.connect(state.audioContext.destination) // required in some browsers
+  state.processorNode = processor
 }
 
 function stopRecording() {
-  if (!state.isRecording || !state.mediaRecorder) return
+  if (!state.isRecording) return
   state.isRecording = false
   micBtn.classList.remove('recording')
   audioStatus.textContent = 'Processing audio...'
   clearTimeout(state.silenceTimeout)
   state.silenceTimeout = null
-  state.mediaRecorder.stop()
+  try {
+    if (state.processorNode) {
+      state.processorNode.disconnect()
+    }
+    if (state.sourceNode) {
+      state.sourceNode.disconnect()
+    }
+  } catch {}
+
+  // Build WAV blob from captured buffers
+  const totalSamples = state.samplesCollected
+  const sampleRate =
+    state.sampleRate ||
+    (state.audioContext && state.audioContext.sampleRate) ||
+    48000
+  const durationSec = totalSamples / sampleRate
+  if (durationSec < 0.6) {
+    // Too short to recognize reliably
+    audioStatus.textContent = 'Recording too short, try again'
+    // Cleanup below, no submit
+  }
+  const wavBlob =
+    durationSec >= 0.6 ? encodeWAV(state.wavBuffers, sampleRate, 16000) : null
+
+  // Cleanup audio resources
+  try {
+    if (state.stream) {
+      state.stream.getTracks().forEach((t) => t.stop())
+    }
+    if (state.audioContext) {
+      state.audioContext.close()
+    }
+  } catch {}
+  state.stream = null
+  state.sourceNode = null
+  state.processorNode = null
+  state.audioContext = null
+  state.wavBuffers = []
+  state.samplesCollected = 0
+  state.sampleRate = 0
+  state.startedAt = 0
+
+  if (wavBlob) submitRecording(wavBlob)
 }
 
 micBtn.addEventListener('mousedown', startRecording)
@@ -277,11 +347,109 @@ micBtn.addEventListener('touchend', (e) => {
   stopRecording()
 })
 
-async function submitRecording() {
-  if (!state.audioChunks.length) return
-  const blob = new Blob(state.audioChunks, { type: 'audio/webm' })
+function floatTo16BitPCM(float32Array) {
+  const len = float32Array.length
+  const buffer = new ArrayBuffer(len * 2)
+  const view = new DataView(buffer)
+  let offset = 0
+  for (let i = 0; i < len; i++, offset += 2) {
+    let s = Math.max(-1, Math.min(1, float32Array[i]))
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+  }
+  return new Uint8Array(buffer)
+}
+
+function writeString(view, offset, str) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i))
+  }
+}
+
+function writeWavHeader(view, sampleRate, dataBytes, channels = 1) {
+  // ChunkID 'RIFF'
+  writeString(view, 0, 'RIFF')
+  // ChunkSize = 36 + Subchunk2Size
+  view.setUint32(4, 36 + dataBytes, true)
+  // Format 'WAVE'
+  writeString(view, 8, 'WAVE')
+  // Subchunk1ID 'fmt '
+  writeString(view, 12, 'fmt ')
+  // Subchunk1Size (16 for PCM)
+  view.setUint32(16, 16, true)
+  // AudioFormat (1 = PCM)
+  view.setUint16(20, 1, true)
+  // NumChannels
+  view.setUint16(22, channels, true)
+  // SampleRate
+  view.setUint32(24, sampleRate, true)
+  // ByteRate = SampleRate * NumChannels * BitsPerSample/8
+  const byteRate = sampleRate * channels * 2
+  view.setUint32(28, byteRate, true)
+  // BlockAlign = NumChannels * BitsPerSample/8
+  view.setUint16(32, channels * 2, true)
+  // BitsPerSample
+  view.setUint16(34, 16, true)
+  // Subchunk2ID 'data'
+  writeString(view, 36, 'data')
+  // Subchunk2Size = NumSamples * NumChannels * BitsPerSample/8
+  view.setUint32(40, dataBytes, true)
+}
+
+function resampleFloat32(input, fromRate, toRate) {
+  if (fromRate === toRate) return input
+  const ratio = fromRate / toRate
+  const newLength = Math.max(1, Math.round(input.length / ratio))
+  const output = new Float32Array(newLength)
+  for (let i = 0; i < newLength; i++) {
+    const idx = i * ratio
+    const idx0 = Math.floor(idx)
+    const idx1 = Math.min(idx0 + 1, input.length - 1)
+    const frac = idx - idx0
+    output[i] = input[idx0] * (1 - frac) + input[idx1] * frac
+  }
+  return output
+}
+
+function encodeWAV(buffers, sampleRate, targetRate = 16000) {
+  // Merge Float32 buffers
+  const length = buffers.reduce((acc, b) => acc + b.length, 0)
+  const merged = new Float32Array(length)
+  let offset = 0
+  for (const b of buffers) {
+    merged.set(b, offset)
+    offset += b.length
+  }
+  let resampled = resampleFloat32(merged, sampleRate, targetRate)
+  // Normalize to avoid very low amplitude
+  let maxAbs = 0
+  for (let i = 0; i < resampled.length; i++) {
+    const v = Math.abs(resampled[i])
+    if (v > maxAbs) maxAbs = v
+  }
+  if (maxAbs > 0 && maxAbs < 0.2) {
+    const gain = Math.min(5, 0.9 / maxAbs)
+    const out = new Float32Array(resampled.length)
+    for (let i = 0; i < resampled.length; i++) out[i] = resampled[i] * gain
+    resampled = out
+  }
+  const pcm16 = floatTo16BitPCM(resampled)
+  const header = new ArrayBuffer(44)
+  const view = new DataView(header)
+  writeWavHeader(view, targetRate, pcm16.byteLength, 1)
+  const wavBytes = new Uint8Array(44 + pcm16.byteLength)
+  wavBytes.set(new Uint8Array(header), 0)
+  wavBytes.set(pcm16, 44)
+  return new Blob([wavBytes], { type: 'audio/wav' })
+}
+
+async function submitRecording(blob) {
+  if (!blob) return
   const form = new FormData()
-  form.append('file', blob, 'recording.webm')
+  form.append('file', blob, 'recording.wav')
+  try {
+    const lang = (navigator.language || 'en-US').replace('_', '-')
+    form.append('language', lang)
+  } catch {}
 
   try {
     const data = await apiFetch('/api/speech-to-text', {

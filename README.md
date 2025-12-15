@@ -1,89 +1,120 @@
 # Voice Assistant
 
-> A production-ready AI voice assistant combining Google Gemini's conversation capabilities with local Whisper speech-to-text and Coqui TTS speech synthesis. Built with Flask and featuring a modern, responsive web UI.
+> A production-ready AI voice assistant with OpenRouter LLM support, browser-based WAV recording, and graceful speech-to-text fallback. Built with Flask and featuring a modern, responsive web UI.
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Available-blue.svg)](Dockerfile)
+[![Flask](https://img.shields.io/badge/Flask-3.0.3-green.svg)](https://flask.palletsprojects.com/)
 
 ## ✨ Features
 
 ### Core Capabilities
-- **Gemini-Powered Conversations** – Uses Google's Gemini API with 5-message short-term memory
-- **Local Speech-to-Text** – OpenAI Whisper with multi-format audio support (WAV, WebM, MP3, OGG)
-- **Natural Speech Synthesis** – Coqui TTS for audio responses with optional voice selection
-- **Cross-Platform Audio** – Auto-converts audio formats via ffmpeg for seamless processing
+
+- **OpenRouter LLM Integration** – Use any model from OpenRouter (Mistral, GPT-4, Claude, etc.) with your own API key
+- **Browser WAV Recording** – Custom client-side audio encoder (16kHz mono PCM) with no server dependencies
+- **Speech-to-Text** – Google STT with graceful fallback (returns "no speech" instead of errors)
+- **Text-to-Speech** – pyttsx3 for natural voice synthesis
+- **Multi-Provider Support** – Easy switching between OpenRouter, Gemini, Qwen, and Ollama
 
 ### User Experience
-- **Voice Recording** – Browser-native MediaRecorder with waveform visualization
-- **Automatic Silence Detection** – Audio stops recording after 1.2s of silence
+
+- **Voice Recording** – Browser-native audio capture with automatic 16kHz resampling and normalization
+- **Automatic Silence Detection** – Stops recording after 1.2s of silence
 - **Live Transcripts** – Real-time transcription display with language detection
 - **Dark/Light Mode** – Theme preference persists across sessions
+- **Service Info Panel** – Real-time health check showing LLM provider, model, STT/TTS status
 - **Copy-to-Clipboard** – Quickly export AI responses
 - **Responsive Design** – Mobile-first, works on desktop/tablet/phone
 
 ### Developer-Friendly
+
 - **REST API** – Clean, predictable endpoints for all operations
-- **Rate Limiting** – IP-based rate limiting (configurable per minute)
+- **Rate Limiting** – IP-based rate limiting (60 req/min)
 - **CORS Enabled** – Cross-origin requests supported
-- **Comprehensive Logging** – Detailed error and debug information
-- **Docker Support** – Multi-stage build with optimized image size
-- **Health Checks** – Built-in service status monitoring
+- **Comprehensive Logging** – Detailed error and debug information with WAV metadata
+- **Health Checks** – `/health` endpoint with service status and configuration
+- **No FFmpeg Required** – Client-side WAV encoding eliminates server-side conversion
 
 ## 🚀 Quick Start
 
-### Option 1: Docker (Recommended)
+### Prerequisites
+
+- Python 3.12+
+- OpenRouter API key (get one free at [openrouter.ai](https://openrouter.ai))
+- Modern browser with Web Audio API support
+
+### Installation
 
 ```bash
-# Clone and enter directory
-git clone https://github.com/yocho1/Voice-Assistant.git
+# Clone repository
+git clone https://github.com/yourusername/Voice-Assistant.git
 cd Voice-Assistant
 
-# Copy environment template
-cp .env.example .env
-
-# Get a free Gemini API key from https://aistudio.google.com/app/apikey
-# Edit .env and update GEMINI_API_KEY
-
-# Build and run
-docker-compose up --build
-```
-
-Visit http://localhost:5000
-
-### Option 2: Local Development
-
-**Requirements:** Python 3.11+, ffmpeg, espeak-ng
-
-```bash
 # Create virtual environment
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-# OR
-source .venv/bin/activate  # macOS/Linux
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # macOS/Linux
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your Gemini API key
+# Edit .env and add your OPENROUTER_API_KEY
 
-# Run
+# Run application
 python app.py
 ```
 
 Visit http://localhost:5000
 
-## 📋 API Documentation
+## 📋 Configuration
 
-### Health & Status
+### Environment Variables (.env)
+
+```bash
+# LLM Provider (openrouter, gemini, qwen, ollama)
+LLM_PROVIDER=openrouter
+
+# OpenRouter Configuration
+OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_MODEL=mistralai/mistral-7b-instruct
+
+# Optional: FFmpeg path (not required for basic functionality)
+# FFMPEG_PATH=/path/to/ffmpeg
+
+# Optional: Server settings
+# PORT=5000
+# REQUESTS_PER_MINUTE=60
+```
+
+Get your free OpenRouter API key at [openrouter.ai](https://openrouter.ai)
+
+## 📋 API Endpoints
+
+### Health Check
+
 ```http
 GET /health
 ```
-Returns service status and model availability.
 
-### Chat Endpoint
+Returns service status, provider info, and configuration.
+
+**Response:**
+
+```json
+{
+  "status": "healthy",
+  "provider": "openrouter",
+  "model": "mistralai/mistral-7b-instruct",
+  "ffmpeg_available": true,
+  "stt_available": true,
+  "tts_available": true
+}
+```
+
+### Chat
+
 ```http
 POST /api/chat
 Content-Type: application/json
@@ -93,107 +124,134 @@ Content-Type: application/json
   "audio": true
 }
 ```
+
 **Response:**
+
 ```json
 {
-  "reply": "Machine learning is...",
-  "audio_url": "/static/audio/tts-abc123.wav",
+  "reply": "Machine learning is a branch of AI...",
+  "audio_url": "/static/audio/tts_1234567890.wav",
   "history": [...]
 }
 ```
 
 ### Speech-to-Text
+
 ```http
 POST /api/speech-to-text
 Content-Type: multipart/form-data
 
-file: <audio_file>
-language: en (optional)
+file: <audio_file.wav>
+language: en-US
 ```
-**Response:**
+
+**Response (Success):**
+
 ```json
 {
-  "transcript": "hello world",
-  "segments": [
-    {
-      "text": "hello",
-      "start": 0.0,
-      "end": 0.5
-    }
-  ],
-  "language": "en"
+  "status": "success",
+  "transcript": "Hello world"
+}
+```
+
+**Response (No Speech Detected):**
+
+```json
+{
+  "status": "no_speech",
+  "transcript": ""
 }
 ```
 
 ### Text-to-Speech
+
 ```http
 POST /api/text-to-speech
 Content-Type: application/json
 
 {
-  "text": "Hello, world!",
-  "voice": "en-US"
+  "text": "Hello, world!"
 }
 ```
+
 **Response:**
+
 ```json
 {
-  "audio_url": "/static/audio/tts-xyz789.wav"
+  "audio_url": "/static/audio/tts_1234567890.wav"
 }
 ```
 
 ### Conversation Management
+
 ```http
 GET /api/conversation
 ```
-Get current conversation history (trimmed).
+
+Get current conversation history.
 
 ```http
 POST /api/conversation/reset
 ```
-Clear all conversation history.
 
-## ⚙️ Configuration
+Clear conversation history.
 
-Create a `.env` file based on `.env.example`:
+## ⚙️ Advanced Configuration
 
-### Gemini Settings
-- `GEMINI_API_KEY` – API key from https://aistudio.google.com/app/apikey
-- `GEMINI_MODEL` – Model to use (default: `gemini-1.5-flash`)
-- `GEMINI_TEMPERATURE` – Creativity level 0.0–2.0 (default: `0.7`)
-- `GEMINI_MAX_TOKENS` – Max response length (default: `512`)
+All configuration is managed through the `.env` file:
+
+### LLM Provider Settings
+
+- `LLM_PROVIDER` – `openrouter`, `gemini`, `qwen`, or `ollama` (default: `openrouter`)
+- `OPENROUTER_API_KEY` – Your OpenRouter API key
+- `OPENROUTER_MODEL` – Model identifier (e.g., `mistralai/mistral-7b-instruct`)
+- `GEMINI_API_KEY` – Google Gemini API key (if using Gemini)
+- `QWEN_API_KEY` – Qwen API key (if using Qwen)
 
 ### Speech Settings
-- `WHISPER_MODEL` – Model size: `tiny`, `base`, `small`, `medium`, `large` (default: `base`)
-- `TTS_MODEL` – Coqui model path (default: `tts_models/en/ljspeech/tacotron2-DDC`)
-- `TTS_VOICE` – Voice ID for synthesis (default: `en-US`)
-- `AUDIO_FORMAT` – Output format: `wav` or `mp3` (default: `wav`)
 
-### Server Settings
-- `FLASK_SECRET_KEY` – Session encryption key
+- `FFMPEG_PATH` – Path to ffmpeg binary (optional, not required for WAV)
+- `REQUESTS_PER_MINUTE` – Rate limit per IP (default: `60`)
 - `PORT` – Server port (default: `5000`)
-- `REQUESTS_PER_MINUTE` – Rate limit (default: `60`)
-- `CONVERSATION_WINDOW` – Messages to retain (default: `5`)
-- `MAX_AUDIO_AGE_MINUTES` – Audio cleanup age (default: `60`)
-- `MAX_UPLOAD_MB` – Max upload size (default: `25`)
+
+### Switching Providers
+
+Edit your `.env` file and change `LLM_PROVIDER`:
+
+```bash
+# Use OpenRouter (recommended)
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_key
+OPENROUTER_MODEL=mistralai/mistral-7b-instruct
+
+# Use Google Gemini
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_key
+
+# Use Qwen
+LLM_PROVIDER=qwen
+QWEN_API_KEY=your_key
+
+# Use local Ollama
+LLM_PROVIDER=ollama
+```
 
 ## 📁 Project Structure
 
 ```
-voice-assistant/
-├── app.py                 # Flask backend with API routes
+Voice-Assistant/
+├── app.py                 # Flask backend with LLM services
 ├── requirements.txt       # Python dependencies
-├── Dockerfile             # Container definition
-├── docker-compose.yml     # Multi-service orchestration
 ├── .env.example          # Environment template
 ├── .gitignore            # Git exclusions
-├── README.md             # This file
+├── README.md             # Documentation
 ├── static/
 │   ├── css/
-│   │   └── style.css     # Dark/light theme with animations
+│   │   └── style.css     # Dark/light theme styling
 │   ├── js/
-│   │   └── voice.js      # Browser audio & API client
-│   └── audio/            # Generated audio files (temp)
+│   │   └── voice.js      # Custom WAV encoder & UI
+│   ├── favicon.svg       # App icon
+│   └── audio/            # Generated TTS files (temporary)
 └── templates/
     └── index.html        # Single-page application
 ```
@@ -202,165 +260,341 @@ voice-assistant/
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Browser (MediaRecorder, Web Audio API)             │
+│  Browser (Web Audio API, ScriptProcessorNode)       │
+│  ├─ Capture raw audio (48kHz/44.1kHz)              │
+│  ├─ Resample to 16kHz mono                         │
+│  ├─ Normalize amplitude                            │
+│  └─ Encode RIFF/WAVE PCM headers                   │
 └──────────────┬──────────────────────────────────────┘
-               │
+               │ (WAV blob)
 ┌──────────────▼──────────────────────────────────────┐
-│  Flask REST API (Rate Limiting, CORS)              │
+│  Flask REST API (CORS, Rate Limiting)              │
 ├──────────────────────────────────────────────────────┤
-│  ├─ Chat Route → Gemini API                        │
-│  ├─ STT Route → Whisper (ffmpeg conversion)        │
-│  ├─ TTS Route → Coqui (audio synthesis + caching)  │
+│  ├─ /api/chat → OpenRouter/Gemini/Qwen/Ollama     │
+│  ├─ /api/speech-to-text → Google STT (graceful)   │
+│  ├─ /api/text-to-speech → pyttsx3                 │
+│  ├─ /health → Service diagnostics                 │
 │  └─ Conversation Management                        │
 └──────────────┬──────────────────────────────────────┘
                │
     ┌──────────┼──────────┬──────────┐
     │          │          │          │
- ┌──▼──┐  ┌────▼──┐  ┌────▼──┐  ┌───▼──┐
- │Audio│  │Gemini │  │Whisper│  │Coqui │
- │Files│  │  API  │  │Models │  │ TTS  │
- └─────┘  └───────┘  └───────┘  └──────┘
+ ┌──▼──┐  ┌────▼──┐  ┌────▼──┐  ┌───▼────┐
+ │Audio│  │OpenRouter│ │Google│ │pyttsx3│
+ │Cache│  │ LLM API │  │ STT  │ │  TTS  │
+ └─────┘  └─────────┘  └──────┘ └───────┘
 ```
-
-## 🐳 Docker Deployment
-
-### Build
-```bash
-docker-compose build
-```
-
-### Run
-```bash
-docker-compose up
-```
-
-### Logs
-```bash
-docker-compose logs -f voice-assistant
-```
-
-### Stop
-```bash
-docker-compose down
-```
-
-The Docker image includes:
-- Python 3.11 slim base
-- ffmpeg for audio conversion
-- espeak-ng for text-to-speech
-- All Python dependencies
-- Optimized multi-stage build (~2GB final image)
 
 ## 🔧 Troubleshooting
 
-### Models take too long to load
-- First run downloads Whisper (~300MB) and Coqui models (~1GB)
-- Gunicorn timeout increased to 5 minutes for model initialization
-- Subsequent runs use cached models (much faster)
+### Speech-to-Text Returns "No Speech Detected"
 
-### "Gemini not configured" error
-- Verify `GEMINI_API_KEY` is set in `.env`
-- Check API key validity at https://aistudio.google.com/app/apikey
-- Ensure key has quota available
+**Common causes:**
 
-### "ffmpeg is required" error
-- **Ubuntu/Debian:** `sudo apt-get install ffmpeg espeak-ng`
-- **macOS:** `brew install ffmpeg espeak-ng`
-- **Windows:** Download from https://ffmpeg.org/download.html or use WSL2 + apt
+- Google STT API quota/access restrictions
+- Microphone permissions not granted in browser
+- Silent or low-amplitude audio recordings
+- Network connectivity issues
 
-### Audio transcription fails
-- Ensure file is valid audio (WAV, MP3, WebM, OGG)
-- Check file size < 25MB (configurable via `MAX_UPLOAD_MB`)
-- Try different language or audio quality
+**Solutions:**
 
-### Rate limiting too strict
-- Adjust `REQUESTS_PER_MINUTE` in `.env`
-- Note: Gunicorn uses in-memory limiter (not recommended for production clusters)
+1. **Check browser permissions:** Click the lock icon in address bar → Allow microphone access
+2. **Test audio quality:** Speak clearly and close to microphone
+3. **Alternative STT engines:**
+   - Install Vosk: `pip install vosk` (offline, fast)
+   - Use Whisper API: `pip install openai-whisper` (more accurate)
+   - Try alternative services: Azure Speech, AWS Transcribe
 
-## 🔐 Security Considerations
+**Current behavior:** App returns HTTP 200 with `status: "no_speech"` instead of errors, allowing graceful UI handling.
 
-- **API Keys:** Never commit `.env` files; use `.env.example` as template
-- **CORS:** Currently allows all origins; restrict in production
-- **Rate Limiting:** IP-based and per-route; use Redis for multi-server deployments
-- **File Uploads:** Validate MIME types and enforce size limits
-- **Audio Cleanup:** Old files auto-pruned; adjust retention via `MAX_AUDIO_AGE_MINUTES`
+### "Provider not configured" Error
 
-## 📊 Performance Notes
+**OpenRouter:**
 
-- **STT Latency:** Whisper "base" ~5-15s for 30s audio on CPU; larger models slower
-- **TTS Latency:** Coqui synthesis ~1-3s per response; caches recent phrases
-- **Memory:** ~2GB for all models in memory; use smaller models for constrained environments
-- **Concurrency:** Single-worker Docker setup; add workers/load balancer for production
+```bash
+# Verify .env has:
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=sk-or-v1-...
+```
 
-## 📝 API Examples
+**Gemini:**
 
-### Python
+```bash
+# Get free key at https://aistudio.google.com/app/apikey
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_key
+```
+
+**Ollama:**
+
+```bash
+# Install from https://ollama.ai
+ollama run mistral
+# Then:
+LLM_PROVIDER=ollama
+```
+
+### FFmpeg Not Found (Optional)
+
+FFmpeg is **not required** for basic functionality (browser sends WAV directly). Only needed for:
+
+- Converting non-WAV uploads (MP3, WebM, OGG)
+- Advanced audio processing
+
+**Installation:**
+
+- **Windows:** Download from https://ffmpeg.org or use `winget install ffmpeg`
+- **macOS:** `brew install ffmpeg`
+- **Linux:** `sudo apt install ffmpeg`
+
+### Rate Limiting Issues
+
+Default: 60 requests/minute per IP. Adjust in `.env`:
+
+```bash
+REQUESTS_PER_MINUTE=120
+```
+
+### Port Already in Use
+
+```bash
+# Change port in .env
+PORT=8080
+
+# Or kill existing process (Windows)
+netstat -ano | findstr :5000
+taskkill /PID <pid> /F
+```
+
+## 🔐 Security Best Practices
+
+- ✅ **Never commit `.env` files** – Use `.env.example` as template
+- ✅ **Rotate API keys regularly** – Especially if exposed
+- ⚠️ **CORS allows all origins** – Restrict in production:
+  ```python
+  CORS(app, resources={r"/api/*": {"origins": ["https://yourdomain.com"]}})
+  ```
+- ✅ **Rate limiting enabled** – Per-IP throttling prevents abuse
+- ✅ **Audio cleanup enabled** – TTS files auto-delete after use
+- ⚠️ **No authentication** – Add JWT/OAuth for public deployments
+
+## 📊 Performance & Optimization
+
+### Response Times (typical)
+
+- **LLM (OpenRouter):** 0.5-3s depending on model
+- **STT (Google):** 1-2s for 3-second audio clips
+- **TTS (pyttsx3):** 0.2-0.8s for short responses
+- **End-to-end voice query:** 2-6s
+
+### Resource Usage
+
+- **Memory:** ~200MB base + ~50MB per concurrent request
+- **CPU:** Low idle, spikes during TTS synthesis
+- **Storage:** Audio files cached in `static/audio/` (auto-cleanup)
+
+### Optimization Tips
+
+1. **Use faster models:** `mistralai/mistral-7b-instruct` is balanced
+2. **Enable caching:** TTS responses are already cached
+3. **CDN for static assets:** Serve CSS/JS from CDN in production
+4. **Async processing:** Consider Celery for long-running tasks
+
+## 📝 Usage Examples
+
+### Python Client
+
 ```python
 import requests
 
-# Chat
+# Health check
+health = requests.get('http://localhost:5000/health').json()
+print(f"Provider: {health['provider']}, Model: {health['model']}")
+
+# Text chat
 response = requests.post('http://localhost:5000/api/chat', json={
-    'message': 'Hello!',
+    'message': 'Explain quantum computing in simple terms',
     'audio': True
 })
 print(response.json()['reply'])
 
-# Voice input
+# Speech-to-text
 with open('recording.wav', 'rb') as f:
-    files = {'file': f}
-    response = requests.post('http://localhost:5000/api/speech-to-text', files=files)
-    print(response.json()['transcript'])
+    files = {'file': ('recording.wav', f, 'audio/wav')}
+    data = {'language': 'en-US'}
+    response = requests.post('http://localhost:5000/api/speech-to-text',
+                           files=files, data=data)
+    result = response.json()
+    if result['status'] == 'success':
+        print(f"Transcript: {result['transcript']}")
 ```
 
-### JavaScript
+### JavaScript Fetch API
+
 ```javascript
-// Chat with audio
-const response = await fetch('/api/chat', {
+// Check health
+const health = await fetch('/health').then((r) => r.json())
+console.log(`${health.provider} - ${health.model}`)
+
+// Send chat message
+const chat = await fetch('/api/chat', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ message: 'Hi', audio: true })
-});
-const data = await response.json();
-console.log(data.reply);
+  body: JSON.stringify({
+    message: 'What is the weather like?',
+    audio: false,
+  }),
+})
+const chatData = await chat.json()
+console.log(chatData.reply)
 ```
 
-### cURL
+### cURL Commands
+
 ```bash
 # Health check
 curl http://localhost:5000/health
 
-# Chat
+# Chat request
 curl -X POST http://localhost:5000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"Hello","audio":true}'
+  -d '{"message":"Hello, how are you?","audio":false}'
+
+# Upload audio for transcription
+curl -X POST http://localhost:5000/api/speech-to-text \
+  -F "file=@recording.wav" \
+  -F "language=en-US"
+
+# Generate speech
+curl -X POST http://localhost:5000/api/text-to-speech \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello world"}'
+```
+
+## 🎯 Key Features Explained
+
+### Custom WAV Encoder
+
+The browser-side WAV encoder eliminates server dependencies:
+
+- Captures raw audio at native sample rate (48kHz/44.1kHz)
+- Resamples to 16kHz mono using linear interpolation
+- Normalizes amplitude to 0.9 max if below 0.2 threshold
+- Writes proper RIFF/WAVE headers with PCM format
+- No ffmpeg required on server
+
+### Graceful STT Fallback
+
+Instead of throwing 500 errors on STT failures:
+
+```json
+{
+  "status": "no_speech",
+  "transcript": ""
+}
+```
+
+This allows UI to show "(no speech detected)" instead of error messages.
+
+### Service Info Panel
+
+Real-time health monitoring displays:
+
+- Active LLM provider and model
+- STT/TTS availability status
+- FFmpeg detection (optional)
+- Server connectivity
+
+### Multi-Provider LLM Support
+
+Switch between providers by changing `.env`:
+
+- **OpenRouter:** Access 100+ models via unified API
+- **Gemini:** Google's fast, free tier available
+- **Qwen:** Chinese LLM alternative
+- **Ollama:** Run models locally (no API key)
+
+## 🚀 Deployment Recommendations
+
+### Production Checklist
+
+- [ ] Use environment-specific `.env` (never commit secrets)
+- [ ] Enable HTTPS (Let's Encrypt/Cloudflare)
+- [ ] Restrict CORS origins
+- [ ] Add authentication (JWT/OAuth)
+- [ ] Use production WSGI server (Gunicorn/uWSGI)
+- [ ] Set up logging (ELK stack/CloudWatch)
+- [ ] Configure reverse proxy (Nginx/Apache)
+- [ ] Enable monitoring (Prometheus/Grafana)
+- [ ] Implement backups for conversation history
+- [ ] Use Redis for rate limiting in multi-server setups
+
+### Cloud Platform Options
+
+**Heroku:**
+
+```bash
+heroku create your-voice-assistant
+heroku config:set OPENROUTER_API_KEY=your_key
+git push heroku main
+```
+
+**Railway:**
+
+```bash
+railway init
+railway add
+# Add OPENROUTER_API_KEY in dashboard
+railway up
+```
+
+**AWS EC2:**
+
+```bash
+# Install dependencies
+sudo apt update && sudo apt install python3-pip
+pip3 install -r requirements.txt
+
+# Run with Gunicorn
+gunicorn -w 4 -b 0.0.0.0:5000 app:app
 ```
 
 ## 📄 License
 
-MIT License – see [LICENSE](LICENSE) file for details.
+MIT License – Free to use, modify, and distribute.
 
 ## 🤝 Contributing
 
-Contributions welcome! Please:
+Contributions are welcome! To contribute:
+
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create feature branch: `git checkout -b feature/your-feature`
+3. Make changes and test thoroughly
+4. Commit: `git commit -m 'Add: your feature description'`
+5. Push: `git push origin feature/your-feature`
+6. Open Pull Request with detailed description
 
-## 📧 Support
+### Development Guidelines
 
-- **Issues:** GitHub Issues for bug reports
-- **Discussions:** GitHub Discussions for feature requests
-- **Documentation:** See inline code comments
+- Follow PEP 8 style guide for Python
+- Add docstrings for new functions
+- Update README for new features
+- Test across different browsers
+- Keep dependencies minimal
 
-## 🗺️ Roadmap
+## 📧 Support & Community
 
-- [ ] Streaming audio responses
-- [ ] Multi-turn conversation context window expansion
-- [ ] Additional TTS voices and language support
-- [ ] Real-time waveform visualization improvements
-- [ ] WebSocket support for lower-latency communication
-- [ ] Conversation export (PDF/JSON)
-- [ ] User authentication and persistent history
-- [ ] Mobile native apps (React Native)
+- **Bug Reports:** GitHub Issues
+- **Feature Requests:** GitHub Discussions
+- **Documentation:** Inline code comments + this README
+
+## 🙏 Acknowledgments
+
+- OpenRouter for unified LLM API access
+- Flask community for excellent documentation
+- Browser Web Audio API contributors
+- Open source speech recognition libraries
+
+---
+
+**Built with ❤️ using Flask, OpenRouter, and vanilla JavaScript**

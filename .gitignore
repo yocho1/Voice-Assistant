@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyc
 .Python
 build/
 develop-eggs/
@@ -33,9 +34,20 @@ venv/
 ENV/
 env/
 .venv/
-.venv311/
+.venv*/
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Audio files (generated TTS, temporary uploads)
+static/audio/*.wav
+static/audio/*.mp3
+static/audio/*.ogg
+!static/audio/.gitkeep
+
+# Logs
+*.log
+logs/
+*.log.*
 
 # IDE / Editor
 .vscode/
@@ -48,6 +60,43 @@ pip-delete-this-directory.txt
 *.sublime-workspace
 .project
 .pydevproject
+*.code-workspace
+
+# OS files
+Thumbs.db
+Desktop.ini
+.directory
+
+# Testing
+.pytest_cache/
+.coverage
+.tox/
+htmlcov/
+*.cover
+.hypothesis/
+
+# Flask
+instance/
+.webassets-cache
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# pyre
+.pyre/
 .settings/
 *.code-workspace
 
